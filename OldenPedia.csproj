@@ -1,0 +1,140 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <AssemblyName>OldenPedia</AssemblyName>
+    <Version>0.75.0</Version>
+    <!-- Keep in sync with Plugin.Version in src/Plugin.cs (shown in-game and in
+         logs) — this one only affects the built DLL's assembly metadata. -->
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- BepInEx bleeding-edge packages come from the BepInEx NuGet feed. -->
+    <RestoreAdditionalProjectSources>https://nuget.bepinex.dev/v3/index.json</RestoreAdditionalProjectSources>
+
+    <!-- ====================================================================
+         EDIT THIS to point at your game install.
+         Defaults are per-OS guesses; override if your Steam library is
+         elsewhere. The interop DLLs referenced below are generated into
+         BepInEx/interop ONLY AFTER you (a) install the BepInEx 6 IL2CPP pack
+         with the Olden-Era deobfuscation config and (b) launch the game once
+         (on Linux: launch via Steam/Proton so the interop is generated inside
+         the Proton run).
+         Forward slashes are used throughout so the same csproj builds on
+         Windows, Linux, and the Steam Deck.
+         ==================================================================== -->
+    <GameDir Condition="'$(OS)' == 'Windows_NT'">C:/Program Files (x86)/Steam/steamapps/common/Heroes of Might and Magic Olden Era</GameDir>
+    <!-- Common native-Steam path. Flatpak Steam: ~/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/...
+         Steam Deck SD card: /run/media/deck/<card>/steamapps/common/... -->
+    <GameDir Condition="'$(OS)' != 'Windows_NT'">$(HOME)/.steam/steam/steamapps/common/Heroes of Might and Magic Olden Era</GameDir>
+    <InteropDir>$(GameDir)/BepInEx/interop</InteropDir>
+    <CoreDir>$(GameDir)/BepInEx/core</CoreDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pin to the same build the community pack ships (be.755) so your mod's
+         ABI matches every other Olden Era mod. Bump only when the pack does. -->
+    <PackageReference Include="BepInEx.Unity.IL2CPP" Version="6.0.0-be.755" />
+    <PackageReference Include="BepInEx.PluginInfoProps" Version="2.*" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Core Unity + IL2CPP interop assemblies (generated on first launch). -->
+    <Reference Include="UnityEngine">
+      <HintPath>$(InteropDir)/UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(InteropDir)/UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(InteropDir)/UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- Legacy input module is intentionally NOT referenced: Olden Era uses the
+         new Input System (Unity.InputSystem.dll, referenced below). -->
+    <Reference Include="Il2Cppmscorlib">
+      <HintPath>$(InteropDir)/Il2Cppmscorlib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Il2CppSystem.Core">
+      <HintPath>$(InteropDir)/Il2CppSystem.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- UI: confirmed uGUI + TextMeshPro. Needed for cloning the resource-bar
+         element and creating the Pedia button.
+         NOTE: Canvas/RectTransform live in the built-in UIModule, NOT in
+         UnityEngine.UI.dll (which holds Button/Image/layout groups). -->
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>$(InteropDir)/UnityEngine.UIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>$(InteropDir)/UnityEngine.UI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>$(InteropDir)/Unity.TextMeshPro.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Input: confirmed new Input System. Used to read the game's binding asset
+         (to pick a free key) and to drive the toggle. -->
+    <Reference Include="Unity.InputSystem">
+      <HintPath>$(InteropDir)/Unity.InputSystem.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Legacy UnityEngine.Input (Input.mousePosition etc). Present in this game's
+         interop; needed so the pedia can read input while the new-system devices
+         are disabled to block the game. -->
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(InteropDir)/UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- HarmonyX, shipped with BepInEx; used to patch the game's legacy Input reads. -->
+    <Reference Include="0Harmony">
+      <HintPath>$(CoreDir)/0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Needed only by the experimental 3D unit preview (UnitPreviewRenderer),
+         to strip Collider/Rigidbody/ParticleSystem/AudioSource off an
+         instantiated unit prefab before it's ever activated. Camera/Light/
+         Renderer/RenderTexture come from UnityEngine.CoreModule, already
+         referenced above. -->
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(InteropDir)/UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.ParticleSystemModule">
+      <HintPath>$(InteropDir)/UnityEngine.ParticleSystemModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.AudioModule">
+      <HintPath>$(InteropDir)/UnityEngine.AudioModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.AnimationModule">
+      <HintPath>$(InteropDir)/UnityEngine.AnimationModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- The game's logic + data. Names inside are obfuscated; the community
+         pack's regex gives stable signature-names and ObfuscatedNameAttribute
+         preserves the originals. Hex.Shared holds the MessagePack DTOs. -->
+    <Reference Include="Hex">
+      <HintPath>$(InteropDir)/Hex.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Hex.Shared">
+      <HintPath>$(InteropDir)/Hex.Shared.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
