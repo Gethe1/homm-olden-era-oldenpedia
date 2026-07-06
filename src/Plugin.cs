@@ -26,9 +26,11 @@ namespace OldenPedia
         internal static Key ToggleKey = Key.Period;
         internal static string LangCode = "en";
         internal static bool BlockMapInput = true;
-        internal static bool Show3DUnitPreview = false;
+        internal static bool Show3DUnitPreview = true;
+        internal static bool EnableDevProbes = false;
 
         private static ConfigEntry<string> _toggleKeyName;
+        private static ConfigEntry<bool> _enableDevProbes;
 
         // Comma-separated type names the F4 detail probe inspects. Editable in
         // the cfg so we can re-aim it at new obfuscated types without rebuilding.
@@ -38,12 +40,12 @@ namespace OldenPedia
         public override void Load()
         {
             Log = base.Log;
-            Log.LogInfo($"{Name} {Version} loading…");
+            Log.LogInfo($"{Name} {Version} loading...");
 
             try
             {
                 BepInEx.Logging.Logger.Listeners.Add(new FileLogListener());
-                Log.LogInfo("File log started → BepInEx/OldenPedia/console.txt");
+                Log.LogInfo("File log started -> BepInEx/OldenPedia/console.txt");
             }
             catch (Exception ex) { Log.LogWarning($"file log listener failed: {ex.Message}"); }
 
@@ -72,12 +74,18 @@ namespace OldenPedia
                 "Set false if it causes any input issues.").Value;
 
             Show3DUnitPreview = Config.Bind(
-                "General", "Show3DUnitPreview", false,
-                "EXPERIMENTAL. Renders the unit's actual 3D model in the detail panel " +
-                "instead of no image. Off by default: it works by instantiating the game's " +
-                "own unit prefab in isolation, which is generally safe but unverified across " +
-                "all units. Try it; if a unit's page looks wrong or causes trouble, turn this " +
-                "back off.").Value;
+                "General", "Show3DUnitPreview", true,
+                "Renders a frozen 3D unit prefab capture in the unit detail panel. " +
+                "Fresh configs default to true; existing config files keep their saved value. " +
+                "Set false if startup/prewarm cost is too high on your machine.").Value;
+            if (!Show3DUnitPreview) Log.LogInfo("3D unit portraits disabled by Show3DUnitPreview=false in config.");
+
+            _enableDevProbes = Config.Bind(
+                "Probe",
+                "EnableDevProbes",
+                false,
+                "Enable the F2-F11/Y/L developer probes. Off by default for release builds.");
+            EnableDevProbes = _enableDevProbes.Value;
 
             _inspectTypes = Config.Bind(
                 "Probe",
@@ -104,8 +112,7 @@ namespace OldenPedia
             }
             catch (Exception ex) { Log.LogError("[block] Harmony init: " + ex.Message); }
 
-            Log.LogInfo($"OldenPedia attached. '{_toggleKeyName.Value}' = open. " +
-                        "F7-F10 = data/loc probes.");
+            Log.LogInfo($"OldenPedia attached. '{_toggleKeyName.Value}' = open. Dev probes {(EnableDevProbes ? "enabled" : "disabled")}.");
         }
 
         // Maps a config string to an InputSystem Key without fragile IL2CPP enum

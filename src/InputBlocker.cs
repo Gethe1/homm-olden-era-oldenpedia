@@ -49,8 +49,9 @@ namespace OldenPedia
         }
 
         // Prefixes: when blocking, set a neutral result and skip the original.
-        private static bool FalseResult(ref bool __result) { if (!Blocking) return true; __result = false; return false; }
-        private static bool ZeroFloat(ref float __result) { if (!Blocking) return true; __result = 0f; return false; }
-        private static bool ZeroVector2(ref Vector2 __result) { if (!Blocking) return true; __result = Vector2.zero; return false; }
+        private static bool ShouldBlock() { return Blocking; }
+        private static bool FalseResult(ref bool __result) { if (!ShouldBlock()) return true; __result = false; return false; }
+        private static bool ZeroFloat(ref float __result) { if (!ShouldBlock()) return true; __result = 0f; return false; }
+        private static bool ZeroVector2(ref Vector2 __result) { if (!ShouldBlock()) return true; __result = Vector2.zero; return false; }
     }
 }

@@ -39,10 +39,16 @@ namespace OldenPedia
         public static readonly List<string> Units = new List<string>();
 
         /// Structured form of each unit for the master–detail UI.
+        public class AbilityInfo
+        {
+            public string Id, Name, Description, IconKey;
+        }
+
         public struct UnitRow
         {
             public string Id, Name, Fraction, Tier, Hp, DmgMin, DmgMax, Off, Def, Spd, Ini;
             public string OwnId, BaseSid, UpgradeSid, Abilities;
+            public List<AbilityInfo> AbilityEntries;
         }
         public static readonly List<UnitRow> UnitRows = new List<UnitRow>();
 
@@ -52,6 +58,7 @@ namespace OldenPedia
             public string Id, Fraction, Subtitle, Display, Description, IconKey, TabLabel;
             public readonly List<string> StatLabels = new List<string>();
             public readonly List<string> StatValues = new List<string>();
+            public readonly List<AbilityInfo> Abilities = new List<AbilityInfo>();
             public void Add(string label, string value)
             {
                 if (string.IsNullOrEmpty(value) || value == "?" || value == "null") return;
@@ -65,32 +72,93 @@ namespace OldenPedia
         /// Units / Heroes / Artifacts — drives the window dropdown + index.
         public static readonly List<Category> Categories = new List<Category>();
 
-        // Discovered via probe: an active ability's display name/description live at
-        // "<familyBaseId>_ability_<rank>_name"/"_description" — familyBaseId is the
-        // unit with _upg/_upg_alt stripped, rank is the ability's own plain Int32
-        // field. A handful of shared/generic abilities (e.g. some queen-type unique
-        // passives) don't follow this and are simply skipped rather than guessed.
-        private static string BuildAbilitiesText(string ownId, List<Il2CppSystem.Object> abilities, Il2CppSystem.Type abilityType)
+        private static string BuildAbilitiesText(List<AbilityInfo> abilities)
         {
-            if (abilities == null || abilities.Count == 0 || abilityType == null) return "";
-            string baseId = FamilyKey(ownId);
+            if (abilities == null || abilities.Count == 0) return "";
             var sb = new StringBuilder();
-            var seenRanks = new HashSet<string>();
-            foreach (var a in abilities)
+            for (int i = 0; i < abilities.Count; i++)
             {
-                string rank = Read(abilityType, a, "rank");
-                if (string.IsNullOrEmpty(rank) || rank == "?" || rank == "null") continue;
-                if (!seenRanks.Add(rank)) continue; // some units list the same ability twice across upgrade tiers
-
-                string name = Localizer.Resolve($"{baseId}_ability_{rank}_name");
-                if (string.IsNullOrEmpty(name)) continue; // shared/generic ability id we can't derive — skip, don't guess
-                string desc = Localizer.Resolve($"{baseId}_ability_{rank}_description");
-
-                sb.Append("• <b>").Append(name).Append("</b>");
-                if (!string.IsNullOrEmpty(desc)) sb.Append(": ").Append(desc);
+                var ability = abilities[i];
+                if (ability == null) continue;
+                string name = ability.Name;
+                string desc = ability.Description;
+                if (string.IsNullOrEmpty(name) && string.IsNullOrEmpty(desc)) continue;
+                if (!string.IsNullOrEmpty(name)) sb.Append("* <b>").Append(name).Append("</b>");
+                if (!string.IsNullOrEmpty(desc))
+                {
+                    if (!string.IsNullOrEmpty(name)) sb.Append(": ");
+                    sb.Append(desc);
+                }
                 sb.AppendLine();
             }
             return sb.ToString().TrimEnd();
+        }
+
+        private static List<AbilityInfo> BuildAbilityEntries(Il2CppSystem.Type viewType, Il2CppSystem.Object viewConfig)
+        {
+            var result = new List<AbilityInfo>();
+            if (viewType == null || viewConfig == null) return result;
+            try
+            {
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                AddAbilityArray(viewType, viewConfig, "abilities", result, seen);
+                AddAbilityArray(viewType, viewConfig, "passives", result, seen);
+            }
+            catch (Exception ex) { Plugin.Log.LogError($"[abilities] view rows: {ex.Message}"); }
+            return result;
+        }
+
+        private static void AddAbilityArray(Il2CppSystem.Type ownerType, Il2CppSystem.Object owner, string field, List<AbilityInfo> result, HashSet<string> seen)
+        {
+            var abilities = ReadObjArray(ownerType, owner, field, out var abilityType);
+            if (abilityType == null) abilityType = FindType("Hex.Configs.AbilityViewConfig");
+            for (int i = 0; i < abilities.Count; i++) AddAbilityView(abilityType, abilities[i], result, seen);
+        }
+
+        private static void AddAbilityView(Il2CppSystem.Type abilityType, Il2CppSystem.Object ability, List<AbilityInfo> result, HashSet<string> seen)
+        {
+            if (abilityType == null || ability == null || result == null || seen == null) return;
+            try
+            {
+                string show = Read(abilityType, ability, "canShowOnUI");
+                if (string.Equals(show, "False", StringComparison.OrdinalIgnoreCase)) return;
+
+                string nameKey = Read(abilityType, ability, "name");
+                string name = ResolveConfigText(nameKey);
+                string desc = ResolveConfigText(Read(abilityType, ability, "description"));
+                string extra = ResolveConfigText(Read(abilityType, ability, "additionalDescription"));
+                string info = ResolveConfigText(Read(abilityType, ability, "infoDescription"));
+                if (!string.IsNullOrEmpty(extra) && !TextEquals(extra, desc)) desc = JoinLines(desc, extra);
+                if (!string.IsNullOrEmpty(info) && !TextEquals(info, desc)) desc = JoinLines(desc, info);
+
+                string icon = Read(abilityType, ability, "icon");
+                if (icon == "?" || icon == "null") icon = null;
+                if (string.IsNullOrEmpty(name) && string.IsNullOrEmpty(desc)) return;
+
+                string key = (nameKey ?? "") + "|" + (name ?? "") + "|" + (desc ?? "") + "|" + (icon ?? "");
+                if (!seen.Add(key)) return;
+                result.Add(new AbilityInfo { Id = nameKey, Name = name, Description = desc, IconKey = icon });
+            }
+            catch { }
+        }
+
+        private static string ResolveConfigText(string key)
+        {
+            if (string.IsNullOrEmpty(key) || key == "?" || key == "null") return "";
+            string value = Localizer.Resolve(key);
+            return string.IsNullOrEmpty(value) ? "" : value;
+        }
+
+        private static bool TextEquals(string a, string b)
+        {
+            return string.Equals(a ?? "", b ?? "", StringComparison.Ordinal);
+        }
+
+        private static string JoinLines(string first, string second)
+        {
+            if (string.IsNullOrEmpty(first)) return second ?? "";
+            if (string.IsNullOrEmpty(second)) return first;
+            return first + "\n" + second;
         }
 
         private static string FamilyKey(string id)
@@ -99,22 +167,6 @@ namespace OldenPedia
             if (id.EndsWith("_upg_alt", StringComparison.Ordinal)) return id.Substring(0, id.Length - 8);
             if (id.EndsWith("_upg", StringComparison.Ordinal)) return id.Substring(0, id.Length - 4);
             return id;
-        }
-
-        // Skills: perks are "<skill>_<n>" (optionally "_alt"); fold them onto the main skill.
-        private static string SkillFamilyKey(string id)
-        {
-            if (string.IsNullOrEmpty(id)) return id;
-            string s = id;
-            if (s.EndsWith("_alt", StringComparison.Ordinal)) s = s.Substring(0, s.Length - 4);
-            int u = s.LastIndexOf('_');
-            if (u > 0 && u < s.Length - 1)
-            {
-                bool digits = true;
-                for (int i = u + 1; i < s.Length; i++) if (!char.IsDigit(s[i])) { digits = false; break; }
-                if (digits) s = s.Substring(0, u);
-            }
-            return s;
         }
 
         // One-time diagnostic: what each secondary category actually resolved to.
@@ -180,6 +232,7 @@ namespace OldenPedia
                 if (fam.Tier == 0) fam.Tier = tierN;
 
                 var it = new PediaItem { Id = r.OwnId, Fraction = frac };
+                if (r.AbilityEntries != null) it.Abilities.AddRange(r.AbilityEntries);
                 string baseName = Localizer.Name(r.Name, r.OwnId);
                 it.Display = tierN > 0 ? $"{Roman(tierN)}  {baseName}" : baseName;
                 it.Subtitle = Cap(frac) + (tierN > 0 ? $"   ·   Tier {tierN}" : "");
@@ -193,7 +246,7 @@ namespace OldenPedia
                 if (string.IsNullOrEmpty(nd)) nd = Localizer.Resolve(r.OwnId + "_description");
                 var sb2 = new StringBuilder();
                 if (!string.IsNullOrEmpty(nd)) sb2.Append(nd);
-                if (!string.IsNullOrEmpty(r.Abilities))
+                if (!string.IsNullOrEmpty(r.Abilities) && it.Abilities.Count == 0)
                 {
                     if (sb2.Length > 0) sb2.Append("\n\n");
                     sb2.Append("<b>Abilities:</b>\n").Append(r.Abilities);
@@ -302,7 +355,8 @@ namespace OldenPedia
                 {
                     if (!setGroups.TryGetValue(set, out var g))
                     {
-                        string sname = Localizer.Resolve(set + "_item_set");
+                        string sname = Localizer.Resolve(set);
+                        if (string.IsNullOrEmpty(sname)) sname = Localizer.Resolve(set + "_item_set");
                         if (string.IsNullOrEmpty(sname)) sname = Localizer.Resolve(set + "_artifactSet_name");
                         if (string.IsNullOrEmpty(sname)) sname = Localizer.Resolve("artifactSet_" + set + "_name");
                         if (string.IsNullOrEmpty(sname)) sname = Localizer.Resolve(set + "_set_name");
@@ -322,14 +376,14 @@ namespace OldenPedia
                         }
                         if (!string.IsNullOrEmpty(bonusText))
                         {
-                            var bonusItem = new PediaItem { Id = set + "#setbonus", Display = sname + " — Set Bonus", Description = bonusText };
+                            var bonusItem = new PediaItem { Id = set + "#setbonus", Display = sname + " - Set Bonus", Description = bonusText };
                             g.Families.Add(new ItemFamily { Key = bonusItem.Id, Variants = { bonusItem } });
                             g.Count++;
                         }
                     }
 
                     // Also append the set info directly onto THIS artifact's own
-                    // page — a separate "Set Bonus" list entry is easy to miss, so
+                    // page. A separate "Set Bonus" list entry is easy to miss, so
                     // don't rely on it being the only place this shows.
                     if (setBonusTexts.TryGetValue(set, out var sbt) && !string.IsNullOrEmpty(sbt))
                     {
@@ -439,43 +493,259 @@ namespace OldenPedia
         private static int _bonusLog = 0;
         private static int _buffLog = 0;
         private static int _setLog = 0;
+        private sealed class SetBonusTier
+        {
+            public int RequiredItems;
+            public string DescKey;
+            public readonly List<string> Values = new List<string>();
+        }
 
-        // Collects the value strings from ItemConfig.bonuses[*].parameters, in order,
-        // so they can be substituted into an effect description's {0},{1},... slots.
+        private static readonly Dictionary<string, List<SetBonusTier>> _setBonusTierCache = new Dictionary<string, List<SetBonusTier>>(StringComparer.OrdinalIgnoreCase);
+        private static readonly HashSet<string> _setBonusTierMissLogged = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly HashSet<string> _setBonusLineMissLogged = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Collects value strings from explicit parameter members and simple scalar arrays/lists.
+        private static bool TryGetMemberValue(Il2CppSystem.Type ownerType, Il2CppSystem.Object obj, string name, out Il2CppSystem.Object value, out Il2CppSystem.Type memberType)
+        {
+            value = null;
+            memberType = null;
+            try
+            {
+                if (ownerType == null || obj == null || string.IsNullOrEmpty(name)) return false;
+
+                var p = ownerType.GetProperty(name, FR);
+                if (p != null)
+                {
+                    value = p.GetValue(obj);
+                    memberType = p.PropertyType;
+                    return value != null;
+                }
+
+                var f = ownerType.GetField(name, FR);
+                if (f != null)
+                {
+                    value = f.GetValue(obj);
+                    memberType = f.FieldType;
+                    return value != null;
+                }
+            }
+            catch { }
+            return false;
+        }
+        private static bool TryReadArrayLike(Il2CppSystem.Object value, Il2CppSystem.Type valueType, out Il2CppSystem.Array arr)
+        {
+            arr = null;
+            try
+            {
+                if (value == null) return false;
+                arr = value.TryCast<Il2CppSystem.Array>();
+                if (arr != null) return true;
+                if (valueType == null) return false;
+                var toArray = valueType.GetMethod("ToArray", F);
+                if (toArray == null) return false;
+                var noArgs = new Il2CppReferenceArray<Il2CppSystem.Object>(0);
+                var arrObj = toArray.Invoke(value, noArgs);
+                arr = arrObj != null ? arrObj.TryCast<Il2CppSystem.Array>() : null;
+                return arr != null;
+            }
+            catch { return false; }
+        }
+
+        private static bool ForEachIl2CppArrayElement(Il2CppSystem.Object value, Il2CppSystem.Type memberType, Action<object> visit)
+        {
+            if (value == null || visit == null) return false;
+            string declared = Safe(() => memberType.FullName);
+            string runtime = Safe(() => value.GetType().FullName);
+            bool declaredArray = !string.IsNullOrEmpty(declared) &&
+                (declared.IndexOf("[]", StringComparison.Ordinal) >= 0 ||
+                 declared.IndexOf("Array", StringComparison.OrdinalIgnoreCase) >= 0);
+            bool runtimeArray = !string.IsNullOrEmpty(runtime) && runtime.IndexOf("Array", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool stringArray =
+                (!string.IsNullOrEmpty(declared) &&
+                 (declared.IndexOf("String[]", StringComparison.Ordinal) >= 0 ||
+                  declared.IndexOf("Il2CppStringArray", StringComparison.Ordinal) >= 0)) ||
+                (!string.IsNullOrEmpty(runtime) && runtime.IndexOf("Il2CppStringArray", StringComparison.Ordinal) >= 0);
+
+            if (stringArray)
+            {
+                try
+                {
+                    var strings = new Il2CppStringArray(value.Pointer);
+                    int length = strings.Length;
+                    for (int i = 0; i < length; i++) visit(strings[i]);
+                    return true;
+                }
+                catch { return false; }
+            }
+
+            bool referenceArray =
+                (!string.IsNullOrEmpty(declared) && declared.IndexOf("Il2CppReferenceArray", StringComparison.Ordinal) >= 0) ||
+                (!string.IsNullOrEmpty(runtime) && runtime.IndexOf("Il2CppReferenceArray", StringComparison.Ordinal) >= 0) ||
+                (declaredArray && !stringArray) || (runtimeArray && !stringArray);
+            if (referenceArray)
+            {
+                try
+                {
+                    var refs = new Il2CppReferenceArray<Il2CppSystem.Object>(value.Pointer);
+                    int length = refs.Length;
+                    for (int i = 0; i < length; i++) visit(refs[i]);
+                    return true;
+                }
+                catch { return false; }
+            }
+
+            return false;
+        }
+        private static Il2CppSystem.Type ResolveArrayElementType(Il2CppSystem.Type memberType)
+        {
+            try
+            {
+                var elem = memberType != null ? memberType.GetElementType() : null;
+                if (elem != null) return elem;
+            }
+            catch { }
+
+            string fullName = Safe(() => memberType.FullName);
+            int start = !string.IsNullOrEmpty(fullName) ? fullName.IndexOf("Hex.", StringComparison.Ordinal) : -1;
+            while (start >= 0)
+            {
+                int end = start;
+                while (end < fullName.Length)
+                {
+                    char c = fullName[end];
+                    if (!(char.IsLetterOrDigit(c) || c == '.' || c == '_' || c == '`')) break;
+                    end++;
+                }
+                if (end > start)
+                {
+                    var t = FindType(fullName.Substring(start, end - start));
+                    if (t != null) return t;
+                }
+                start = fullName.IndexOf("Hex.", start + 1, StringComparison.Ordinal);
+            }
+            return null;
+        }
+
+        private static bool IsSimpleScalarType(string typeName)
+        {
+            switch (typeName)
+            {
+                case "String":
+                case "Int32":
+                case "UInt32":
+                case "Int16":
+                case "Int64":
+                case "UInt16":
+                case "UInt64":
+                case "Single":
+                case "Double":
+                case "Boolean":
+                case "Byte":
+                case "SByte":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static string SimpleValueText(Il2CppSystem.Object value)
+        {
+            if (value == null) return null;
+            string typeName = Safe(() => value.GetType().Name);
+            return Boxed(value, typeName);
+        }
+
+        private static bool AppendSimpleValues(Il2CppSystem.Object value, Il2CppSystem.Type valueType, List<string> vals, int depth = 0)
+        {
+            if (value == null || vals == null || depth > 2) return false;
+            bool wrapperAny = false;
+            if (ForEachIl2CppArrayElement(value, valueType, element =>
+            {
+                if (AppendSimpleManagedValue(element, vals, depth + 1)) wrapperAny = true;
+            })) return wrapperAny;
+
+            Il2CppSystem.Array arr;
+            if (TryReadArrayLike(value, valueType, out arr))
+            {
+                bool any = false;
+                int n = 0;
+                try { n = arr.Length; } catch { return false; }
+                for (int i = 0; i < n; i++)
+                {
+                    Il2CppSystem.Object e;
+                    try { e = arr.GetValue(i); } catch { continue; }
+                    if (AppendSimpleValues(e, null, vals, depth + 1)) any = true;
+                }
+                return any;
+            }
+
+
+
+            string typeName = Safe(() => value.GetType().Name);
+            if (!IsSimpleScalarType(typeName)) return false;
+            string s = SimpleValueText(value);
+            if (string.IsNullOrEmpty(s) || s == "null" || s == "?") return false;
+            vals.Add(s);
+            return true;
+        }
+
+        private static bool AppendSimpleManagedValue(object value, List<string> vals, int depth)
+        {
+            if (value == null || vals == null || depth > 2) return false;
+            if (value is string s)
+            {
+                if (string.IsNullOrEmpty(s) || s == "null" || s == "?") return false;
+                vals.Add(s);
+                return true;
+            }
+            if (value is Il2CppSystem.Object obj)
+                return AppendSimpleValues(obj, null, vals, depth);
+
+            var type = value.GetType();
+            switch (Type.GetTypeCode(type))
+            {
+                case TypeCode.Boolean:
+                case TypeCode.Byte:
+                case TypeCode.SByte:
+                case TypeCode.Int16:
+                case TypeCode.UInt16:
+                case TypeCode.Int32:
+                case TypeCode.UInt32:
+                case TypeCode.Int64:
+                case TypeCode.UInt64:
+                case TypeCode.Single:
+                case TypeCode.Double:
+                case TypeCode.Decimal:
+                    vals.Add(Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture));
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         private static List<string> ReadBonusParams(Il2CppSystem.Type ownerType, Il2CppSystem.Object obj)
         {
             var vals = new List<string>();
             try
             {
-                if (ownerType == null) return vals;
-                var bf = ownerType.GetField("bonuses", FR);
-                if (bf == null) return vals;
-                var bv = bf.GetValue(obj);
-                var barr = bv != null ? bv.TryCast<Il2CppSystem.Array>() : null;
-                if (barr == null) return vals;
-                var bonusType = FindType("Hex.Configs.BonusConfig");
-                var pf = bonusType != null ? bonusType.GetField("parameters", FR) : null;
-                if (pf == null) return vals;
-                for (int i = 0; i < barr.Length; i++)
+                if (ownerType == null || obj == null) return vals;
+
+                if (TryGetMemberValue(ownerType, obj, "parameters", out var directParams, out var directParamsType))
+                    AppendSimpleValues(directParams, directParamsType, vals);
+
+                if (vals.Count > 0) return vals;
+
+                var bonuses = ReadObjArray(ownerType, obj, "bonuses", out var bonusType);
+                if (bonusType == null) bonusType = FindType("Hex.Configs.BonusConfig");
+                foreach (var bonus in bonuses)
                 {
-                    var b = barr.GetValue(i);
-                    if (b == null) continue;
-                    var pv = pf.GetValue(b);
-                    var parr = pv != null ? pv.TryCast<Il2CppSystem.Array>() : null;
-                    if (parr == null) continue;
-                    for (int j = 0; j < parr.Length; j++)
-                    {
-                        var pe = parr.GetValue(j);
-                        if (pe == null) continue;
-                        string s = pe.ToString();
-                        if (!string.IsNullOrEmpty(s) && s != "null") vals.Add(s);
-                    }
+                    if (bonus == null || bonusType == null) continue;
+                    if (TryGetMemberValue(bonusType, bonus, "parameters", out var paramsObj, out var paramsType))
+                        AppendSimpleValues(paramsObj, paramsType, vals);
                 }
             }
             catch { }
             return vals;
         }
-
         // Fills {0},{1},... from vals, in order. If a placeholder is immediately
         // followed by '%' in the template AND the value looks like a 0-1 fraction,
         // it's converted to a whole-number percent first (0.4 -> "40", not "0.40")
@@ -506,19 +776,23 @@ namespace OldenPedia
             var list = new List<Il2CppSystem.Object>();
             try
             {
-                if (ownerType == null) return list;
-                var f = ownerType.GetField(field, FR);
-                if (f == null) return list;
-                var av = f.GetValue(obj);
-                var arr = av != null ? av.TryCast<Il2CppSystem.Array>() : null;
-                if (arr == null) return list;
-                try { elemType = f.FieldType.GetElementType(); } catch { }
-                for (int i = 0; i < arr.Length; i++) { var e = arr.GetValue(i); if (e != null) list.Add(e); }
+                if (!TryGetMemberValue(ownerType, obj, field, out var value, out var memberType)) return list;
+                elemType = ResolveArrayElementType(memberType);
+                Il2CppSystem.Array arr;
+                if (TryReadArrayLike(value, memberType, out arr))
+                {
+                    for (int i = 0; i < arr.Length; i++) { var e = arr.GetValue(i); if (e != null) list.Add(e); }
+                    return list;
+                }
+
+                ForEachIl2CppArrayElement(value, memberType, element =>
+                {
+                    if (element is Il2CppSystem.Object e && e != null) list.Add(e);
+                });
             }
             catch { }
             return list;
         }
-
         private static string Trunc(string s, int n) { if (string.IsNullOrEmpty(s)) return ""; return s.Length > n ? s.Substring(0, n) : s; }
 
         // Writes a detailed dump of artifact bonuses and skill parametersPerLevel so
@@ -815,59 +1089,66 @@ namespace OldenPedia
             return val;
         }
 
-        // Perks (sub-skills) aren't in the skill's own parametersPerLevel; their
-        // numeric values live in a separate config catalog keyed by the perk id.
-        // The exact type name isn't confirmed, so a few plausible candidates are
-        // tried in order; whichever exists and yields values wins. Cached per id.
-        private static readonly string[] PerkCatalogCandidates =
-        { "Hex.Configs.PerkConfig", "Hex.Configs.SubSkillConfig", "Hex.Configs.PerkLogicConfig", "Hex.Configs.SkillPerkConfig" };
-        private static readonly Dictionary<string, List<string>> _perkValCache = new Dictionary<string, List<string>>();
+        // Subskill option values live in Hex.Configs.SubSkillConfig. The skill
+        // tiers reference subskill ids from SkillParameter.subSkills, and the
+        // display/description loc keys come from the referenced SubSkillConfig.
+        private const string SubSkillCatalog = "Hex.Configs.SubSkillConfig";
+        private static readonly Dictionary<string, List<string>> _subSkillValCache = new Dictionary<string, List<string>>();
+        private static bool _subSkillCatalogLogged;
 
-        private static bool _perkCatalogLogged;
-
-        private static List<string> FindPerkBonusValues(string perkId)
+        private static bool TryGetSubSkillConfig(string subSkillId, out Il2CppSystem.Type subType, out Il2CppSystem.Object subObj)
         {
-            if (_perkValCache.TryGetValue(perkId, out var cached)) return cached;
-            var result = new List<string>();
-            string hitCatalog = null;
-            foreach (var cand in PerkCatalogCandidates)
+            subType = null;
+            subObj = null;
+            if (string.IsNullOrEmpty(subSkillId)) return false;
+            var idx = BuildIdIndex(SubSkillCatalog, out subType);
+            if (!_subSkillCatalogLogged)
             {
-                try
-                {
-                    var idx = BuildIdIndex(cand, out var ptype);
-                    if (!_perkCatalogLogged) Plugin.Log.LogInfo($"[perk] catalog '{cand}': {idx.Count} entries");
-                    if (idx.Count == 0 || ptype == null) continue;
-                    if (!idx.TryGetValue(perkId, out var pobj)) continue;
-                    result = ReadBonusParams(ptype, pobj);
-                    if (result.Count == 0) result = ReadStringArray(ptype, pobj, "parameters");
-                    if (result.Count > 0) { hitCatalog = cand; break; }
-                }
-                catch { }
+                _subSkillCatalogLogged = true;
+                Plugin.Log.LogInfo($"[subskill] catalog '{SubSkillCatalog}': {idx.Count} entries");
             }
-            _perkCatalogLogged = true;
-            if (hitCatalog != null) Plugin.Log.LogInfo($"[perk] {perkId} -> {hitCatalog}: [{string.Join(",", result.ToArray())}]");
-            _perkValCache[perkId] = result;
+            return subType != null && idx.TryGetValue(subSkillId, out subObj) && subObj != null;
+        }
+
+        private static List<string> FindSubSkillBonusValues(string subSkillId)
+        {
+            if (_subSkillValCache.TryGetValue(subSkillId, out var cached)) return cached;
+            var result = new List<string>();
+            if (TryGetSubSkillConfig(subSkillId, out var subType, out var subObj))
+            {
+                result = ReadBonusParams(subType, subObj);
+                Plugin.Log.LogInfo($"[subskill] {subSkillId} values=[{string.Join(",", result.ToArray())}]");
+            }
+            _subSkillValCache[subSkillId] = result;
             return result;
         }
 
-        // First numeric value among a skill level's bonus parameters (fractions < 1
-        // shown as whole-number percents, e.g. 0.15 -> 15).
-        // Explodes one SkillConfig into its tab variants: Basic (no choices),
-        // Advanced/Expert (each with their own filled effect + a "Choose one:" list
-        // of that tier's subSkill perks). This gives the skill > tier > options
-        // structure via the same tab mechanism units already use for upgrades.
-        // Main skill = its own menu entry (baseline effect + icon, no tabs needed).
-        // Each upgrade tier that has real choices ("Upgrade 1" = Advanced,
-        // "Upgrade 2" = Expert) becomes its OWN separate menu entry (family) right
-        // below it, and that upgrade's 3 perk choices become that family's tabs —
-        // i.e. skill > upgrade (own entry) > option (its tab), rather than one
-        // flattened page.
-        // Content fingerprint for a skill's generated families — used to detect
-        // when the same skill under Normal/Arena/Campaign is functionally
-        // identical (same fingerprint) versus a genuinely different variant.
-        // Plain class instead of a value tuple — named tuples can require compiler-
-        // synthesized attributes (NullableAttribute) that aren't available against
-        // this game's reference assemblies, causing CS0656 at build time.
+        private static string ResolveSubSkillName(string subSkillId)
+        {
+            if (!TryGetSubSkillConfig(subSkillId, out var subType, out var subObj)) return null;
+            string key = Read(subType, subObj, "name");
+            string value = Localizer.Resolve(key);
+            return !string.IsNullOrEmpty(value) ? value : null;
+        }
+
+        private static string ResolveSubSkillDescription(string subSkillId)
+        {
+            if (!TryGetSubSkillConfig(subSkillId, out var subType, out var subObj)) return null;
+            string key = Read(subType, subObj, "desc");
+            string value = Localizer.Resolve(key);
+            if (!string.IsNullOrEmpty(value) && value.IndexOf('{') >= 0)
+            {
+                var vals = FindSubSkillBonusValues(subSkillId);
+                if (vals.Count > 0) value = FillPlaceholders(value, vals);
+            }
+            if (!string.IsNullOrEmpty(value) && value.IndexOf('{') >= 0) value = StripUnresolvedLines(value);
+            return value;
+        }
+        // Content fingerprint for a skill's generated families. Used to merge
+        // Normal/Arena/Campaign copies only when their generated text is identical.
+        // Plain classes are used instead of value tuples because named tuples can
+        // require compiler-synthesized attributes unavailable in this game's
+        // reference assemblies.
         private class BuiltSkill
         {
             public string DispName, Sig, TypeName;
@@ -878,12 +1159,18 @@ namespace OldenPedia
         {
             var sb = new StringBuilder();
             foreach (var f in fams)
+            {
+                sb.Append("F:").Append(f.Key ?? "").Append(':').Append(f.Variants.Count).Append('|');
                 foreach (var v in f.Variants)
-                    sb.Append(v.Description ?? "").Append('|');
+                {
+                    sb.Append("V:").Append(v.Id ?? "").Append(':')
+                      .Append(v.TabLabel ?? "").Append(':')
+                      .Append(v.Display ?? "").Append(':')
+                      .Append(v.Description ?? "").Append('|');
+                }
+            }
             return sb.ToString();
         }
-
-        // Plain class instead of a value tuple — see BuiltSkill for why.
         private class SkillOption { public string Name, Desc; }
 
         private static List<ItemFamily> BuildSkillFamilies(Il2CppSystem.Type type, Il2CppSystem.Object o, PediaItem baseItem)
@@ -894,43 +1181,47 @@ namespace OldenPedia
                 var levels = ReadObjArray(type, o, "parametersPerLevel", out var spt);
                 if (spt == null || levels.Count == 0) { result.Add(new ItemFamily { Key = baseItem.Id, Variants = { baseItem } }); return result; }
 
-                // Main skill entry: baseline (tier 0 / Basic) effect only, no options.
-                string baseDescKey = Read(spt, levels[0], "desc");
-                string baseDesc = Localizer.Resolve(baseDescKey);
-                string baseVal = GetLevelValue(spt, levels[0]);
-                if (!string.IsNullOrEmpty(baseDesc) && !string.IsNullOrEmpty(baseVal) && baseDesc.IndexOf("{0}", StringComparison.Ordinal) >= 0)
-                    baseDesc = baseDesc.Replace("{0}", baseVal);
-                if (!string.IsNullOrEmpty(baseDesc) && baseDesc.IndexOf('{') >= 0) baseDesc = StripUnresolvedLines(baseDesc);
-                if (!string.IsNullOrEmpty(baseDesc)) baseItem.Description = baseDesc;
-                result.Add(new ItemFamily { Key = baseItem.Id, Variants = { baseItem } });
+                var levelFam = new ItemFamily { Key = baseItem.Id };
+                for (int i = 0; i < levels.Count; i++)
+                {
+                    var lv = levels[i];
+                    string levelName = Localizer.Resolve(Read(spt, lv, "name"));
+                    string desc = BuildSkillLevelDescription(spt, lv);
+                    if (string.IsNullOrEmpty(desc) && i == 0) desc = baseItem.Description;
+                    string icon = Read(spt, lv, "icon");
+                    if (icon == "?" || icon == "null") icon = baseItem.IconKey;
 
-                int realUpgradeNum = 0;
-                for (int i = 1; i < levels.Count; i++) // tiers past Basic are the "upgrades"
+                    levelFam.Variants.Add(new PediaItem
+                    {
+                        Id = baseItem.Id + "#level" + (i + 1),
+                        Fraction = baseItem.Fraction,
+                        Display = baseItem.Display,
+                        Subtitle = baseItem.Subtitle,
+                        Description = desc,
+                        IconKey = string.IsNullOrEmpty(icon) ? baseItem.IconKey : icon,
+                        TabLabel = SkillLevelTabLabel(levelName, i)
+                    });
+                }
+                result.Add(levelFam);
+
+                for (int i = 0; i < levels.Count; i++)
                 {
                     var lv = levels[i];
                     var subs = ReadStringArray(spt, lv, "subSkills");
-                    if (subs.Count == 0) continue; // nothing to choose at this tier
+                    if (subs.Count == 0) continue;
 
-                    string tierDesc = Localizer.Resolve(Read(spt, lv, "desc"));
-                    string tierVal = GetLevelValue(spt, lv);
-                    if (!string.IsNullOrEmpty(tierDesc) && !string.IsNullOrEmpty(tierVal) && tierDesc.IndexOf("{0}", StringComparison.Ordinal) >= 0)
-                        tierDesc = tierDesc.Replace("{0}", tierVal);
-                    if (!string.IsNullOrEmpty(tierDesc) && tierDesc.IndexOf('{') >= 0) tierDesc = StripUnresolvedLines(tierDesc);
+                    string levelName = Localizer.Resolve(Read(spt, lv, "name"));
+                    string tierLabel = SkillLevelTabLabel(levelName, i);
+                    string tierDesc = BuildSkillLevelDescription(spt, lv);
 
                     var seen = new HashSet<string>();
                     var options = new List<SkillOption>();
                     foreach (var sub in subs)
                     {
                         if (!seen.Add(sub)) continue;
-                        string pn = Localizer.Resolve(sub + "_name");
+                        string pn = ResolveSubSkillName(sub);
                         if (string.IsNullOrEmpty(pn)) continue;
-                        string pd = Localizer.Resolve(sub + "_desc");
-                        if (!string.IsNullOrEmpty(pd) && pd.IndexOf('{') >= 0)
-                        {
-                            var pvals = FindPerkBonusValues(sub);
-                            if (pvals.Count > 0) pd = FillPlaceholders(pd, pvals);
-                        }
-                        if (!string.IsNullOrEmpty(pd) && pd.IndexOf('{') >= 0) pd = StripUnresolvedLines(pd);
+                        string pd = ResolveSubSkillDescription(sub);
                         string optDesc = pd;
                         if (!string.IsNullOrEmpty(tierDesc))
                             optDesc = string.IsNullOrEmpty(optDesc) ? tierDesc : tierDesc + "\n\n" + optDesc;
@@ -939,58 +1230,72 @@ namespace OldenPedia
 
                     if (options.Count == 0)
                     {
-                        if (_skillTierLog < 40) { _skillTierLog++; Plugin.Log.LogInfo($"[skilltier] {baseItem.Id} tier{i}: rawSubs={subs.Count} resolved=0 -> SKIPPED (nothing resolved)"); }
-                        continue; // nothing resolved at all — skip silently
-                    }
-
-                    if (options.Count == 1)
-                    {
-                        if (_skillTierLog < 40) { _skillTierLog++; Plugin.Log.LogInfo($"[skilltier] {baseItem.Id} tier{i}: rawSubs={subs.Count} resolved=1 -> FOLDED into main ('{options[0].Name}')"); }
-                        // Not a real choice — fold it into the main skill instead of
-                        // showing a menu entry with a single, unavoidable "option".
-                        string fold = "<b>" + options[0].Name + "</b>";
-                        if (!string.IsNullOrEmpty(options[0].Desc)) fold += ": " + options[0].Desc;
-                        baseItem.Description = string.IsNullOrEmpty(baseItem.Description) ? fold : baseItem.Description + "\n\n" + fold;
+                        if (_skillTierLog < 40) { _skillTierLog++; Plugin.Log.LogInfo($"[skilltier] {baseItem.Id} {tierLabel}: rawSubs={subs.Count} resolved=0 -> SKIPPED (subskill config/name unresolved)"); }
                         continue;
                     }
 
-                    if (_skillTierLog < 40) { _skillTierLog++; Plugin.Log.LogInfo($"[skilltier] {baseItem.Id} tier{i}: rawSubs={subs.Count} resolved={options.Count} -> Upgrade {realUpgradeNum + 1}"); }
-                    realUpgradeNum++;
-                    var upgFam = new ItemFamily { Key = baseItem.Id + "#upg" + realUpgradeNum };
+                    if (_skillTierLog < 40) { _skillTierLog++; Plugin.Log.LogInfo($"[skilltier] {baseItem.Id} {tierLabel}: rawSubs={subs.Count} resolved={options.Count}"); }
+                    var optionFam = new ItemFamily { Key = baseItem.Id + "#subskills" + (i + 1) };
                     foreach (var opt in options)
                     {
-                        upgFam.Variants.Add(new PediaItem
+                        optionFam.Variants.Add(new PediaItem
                         {
-                            Id = baseItem.Id + "#" + opt.Name,
+                            Id = baseItem.Id + "#" + tierLabel + "#" + opt.Name,
                             Fraction = baseItem.Fraction,
-                            Display = baseItem.Display + " — Upgrade " + realUpgradeNum,
+                            Display = baseItem.Display + " - " + tierLabel + " Subskills",
                             Subtitle = baseItem.Subtitle,
                             Description = opt.Desc,
                             IconKey = baseItem.IconKey,
                             TabLabel = opt.Name
                         });
                     }
-                    result.Add(upgFam);
+                    result.Add(optionFam);
                 }
             }
-            catch { }
+            catch (Exception ex) { Plugin.Log.LogError($"[skilltier] {baseItem?.Id}: {ex.Message}"); }
             if (result.Count == 0) result.Add(new ItemFamily { Key = baseItem.Id, Variants = { baseItem } });
             return result;
         }
-
-        private static string GetLevelValue(Il2CppSystem.Type spt, Il2CppSystem.Object level)
+        private static string BuildSkillLevelDescription(Il2CppSystem.Type spt, Il2CppSystem.Object level)
         {
+            string desc = Localizer.Resolve(Read(spt, level, "desc"));
+            if (string.IsNullOrEmpty(desc)) return desc;
+            if (desc.IndexOf('{') >= 0)
+            {
+                var vals = GetLevelValues(spt, level);
+                if (vals.Count > 0) desc = FillPlaceholders(desc, vals);
+            }
+            if (!string.IsNullOrEmpty(desc) && desc.IndexOf('{') >= 0) desc = StripUnresolvedLines(desc);
+            return desc;
+        }
+
+        private static string SkillLevelTabLabel(string levelName, int index)
+        {
+            if (!string.IsNullOrEmpty(levelName))
+            {
+                if (levelName.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase)) return "Basic";
+                if (levelName.StartsWith("Advanced ", StringComparison.OrdinalIgnoreCase)) return "Advanced";
+                if (levelName.StartsWith("Expert ", StringComparison.OrdinalIgnoreCase)) return "Expert";
+                return levelName;
+            }
+            if (index == 0) return "Basic";
+            if (index == 1) return "Advanced";
+            if (index == 2) return "Expert";
+            return "Level " + (index + 1);
+        }
+
+        private static List<string> GetLevelValues(Il2CppSystem.Type spt, Il2CppSystem.Object level)
+        {
+            var vals = new List<string>();
             try
             {
                 var bonuses = ReadObjArray(spt, level, "bonuses", out var lbt);
-                if (lbt == null) return null;
+                if (lbt == null) return vals;
                 foreach (var b in bonuses)
-                    foreach (var p in ReadStringArray(lbt, b, "parameters"))
-                        if (float.TryParse(p, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out float f) && f != 0f)
-                            return FormatNum(f);
+                    AppendNumericValues(ReadStringArray(lbt, b, "parameters"), vals);
             }
             catch { }
-            return null;
+            return vals;
         }
 
         private static string FormatNum(float f)
@@ -1008,73 +1313,110 @@ namespace OldenPedia
             g.Count++;
         }
 
-        // Artifact sets have a real name key ("<set>_item_set"), and combination
-        // bonuses at "<set>_item_set_description_<n>" — n is a 1-based bonus-tier
-        // index (NOT a piece count). Confirmed against real data (Milos's Curse):
-        // "milos_curse_item_set_description_1" = "+{0} Gold daily." — the {0} needs
-        // filling from wherever the set's own bonus values live (catalog name not
-        // yet confirmed; candidates tried below, logged either way).
-        private static readonly string[] SetBonusCatalogCandidates =
-        { "Hex.Configs.ItemSetConfig", "Hex.Configs.ArtifactSetConfig", "Hex.Configs.SetConfig", "Hex.Configs.ItemSetLogicConfig" };
+        // Artifact set bonuses are native ItemSetConfig.bonuses tiers. Each tier
+        // carries its own requiredItemsAmount, desc loc key, and heroBonuses.
         private static int _setValLog = 0;
         private static int _skillTierLog = 0;
 
         private static string BuildSetBonusText(string set, int itemCount)
         {
-            var vals = FindSetBonusValues(set);
-            var tiers = new List<string>();
-            for (int n = 1; n <= 6; n++)
-            {
-                string d = Localizer.Resolve($"{set}_item_set_description_{n}");
-                if (string.IsNullOrEmpty(d)) d = Localizer.Resolve($"{set}_item_set_description_{n}_alt");
-                if (string.IsNullOrEmpty(d)) continue;
-                if (d.IndexOf('{') >= 0 && vals.Count > 0) d = FillPlaceholders(d, vals);
-                if (d.IndexOf('{') >= 0) d = StripUnresolvedLines(d);
-                if (!string.IsNullOrEmpty(d)) tiers.Add(d);
-            }
-            if (tiers.Count == 0 && itemCount <= 0) return "";
+            var tiers = FindSetBonusTiers(set);
+            if (tiers.Count == 0) return "";
 
-            var sb = new StringBuilder();
-            if (itemCount > 0) sb.Append(itemCount).Append(itemCount == 1 ? " item in set" : " items in set").AppendLine();
-
-            // The exact piece-count needed per tier isn't confirmed from loc data
-            // alone (a 6-item set can have just 2 bonus tiers, so it isn't a simple
-            // "2,3,4..." progression) — labeled honestly as partial vs. full instead
-            // of guessing a specific wrong number.
+            var lines = new List<string>();
             for (int i = 0; i < tiers.Count; i++)
             {
-                bool isLast = i == tiers.Count - 1;
-                string label = tiers.Count == 1 ? "Full set bonus" : (isLast ? "Full set bonus" : "Partial set bonus");
-                sb.Append("• <b>").Append(label).Append(":</b> ").Append(tiers[i]).AppendLine();
+                var tier = tiers[i];
+                string d = Localizer.Resolve(tier.DescKey);
+                if (string.IsNullOrEmpty(d))
+                {
+                    if (_setBonusLineMissLogged.Add(set + ":missing:" + i))
+                        Plugin.Log.LogInfo($"[setbonus] set='{set}' tier={i + 1} has no resolved description key '{tier.DescKey}'");
+                    continue;
+                }
+                if (d.IndexOf('{') >= 0 && tier.Values.Count > 0) d = FillPlaceholders(d, tier.Values);
+                if (d.IndexOf('{') >= 0)
+                {
+                    if (_setBonusLineMissLogged.Add(set + ":placeholder:" + i))
+                        Plugin.Log.LogInfo($"[setbonus] set='{set}' tier={i + 1} still has unresolved placeholder text; dropping unresolved lines");
+                    d = StripUnresolvedLines(d);
+                }
+                if (string.IsNullOrEmpty(d)) continue;
+                lines.Add("* <b>" + SetBonusTierLabel(tier, i, tiers.Count) + ":</b> " + d);
             }
+
+            if (lines.Count == 0) return "";
+            var sb = new StringBuilder();
+            if (itemCount > 0) sb.Append(itemCount).Append(itemCount == 1 ? " item in set" : " items in set").AppendLine();
+            foreach (var line in lines) sb.AppendLine(line);
             return sb.ToString().TrimEnd();
         }
-
-        // Tries a few plausible catalog names for the set's own bonus values,
-        // logging what's found either way (same pattern as FindPerkBonusValues).
-        private static List<string> FindSetBonusValues(string set)
+        private static string SetBonusTierLabel(SetBonusTier tier, int index, int total)
         {
-            var result = new List<string>();
-            string hitCatalog = null;
-            foreach (var cand in SetBonusCatalogCandidates)
+            if (tier != null && tier.RequiredItems > 0) return tier.RequiredItems + "-item bonus";
+            bool isLast = index == total - 1;
+            return total == 1 ? "Full set bonus" : (isLast ? "Full set bonus" : "Partial set bonus");
+        }
+
+        private static void AppendNumericValues(List<string> source, List<string> target)
+        {
+            if (source == null || target == null) return;
+            for (int i = 0; i < source.Count; i++)
             {
-                try
-                {
-                    var idx = BuildIdIndex(cand, out var stype);
-                    if (_setValLog < 8) Plugin.Log.LogInfo($"[setval] catalog '{cand}': {idx.Count} entries");
-                    if (idx.Count == 0 || stype == null) continue;
-                    if (!idx.TryGetValue(set, out var sobj)) continue;
-                    result = ReadBonusParams(stype, sobj);
-                    if (result.Count == 0) result = ReadStringArray(stype, sobj, "parameters");
-                    if (result.Count > 0) { hitCatalog = cand; break; }
-                }
-                catch { }
+                string value = source[i];
+                if (float.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out _))
+                    target.Add(value);
             }
+        }
+
+        private static List<SetBonusTier> FindSetBonusTiers(string set)
+        {
+            if (_setBonusTierCache.TryGetValue(set, out var cached)) return cached;
+
+            var result = new List<SetBonusTier>();
+            try
+            {
+                var idx = BuildIdIndex("Hex.Configs.ItemSetConfig", out var stype);
+                if (_setValLog < 8) Plugin.Log.LogInfo($"[setval] catalog 'Hex.Configs.ItemSetConfig': {idx.Count} entries");
+                if (idx.Count > 0 && stype != null && idx.TryGetValue(set, out var sobj))
+                {
+                    var bonusObjs = ReadObjArray(stype, sobj, "bonuses", out var tierType);
+                    if (tierType == null) tierType = FindType("Hex.Configs.ItemSetBonus");
+                    foreach (var bonusObj in bonusObjs)
+                    {
+                        if (bonusObj == null || tierType == null) continue;
+                        var tier = new SetBonusTier();
+                        tier.DescKey = Read(tierType, bonusObj, "desc");
+                        int req;
+                        if (int.TryParse(Read(tierType, bonusObj, "requiredItemsAmount"), out req)) tier.RequiredItems = req;
+
+                        var heroBonuses = ReadObjArray(tierType, bonusObj, "heroBonuses", out var bonusType);
+                        if (bonusType == null) bonusType = FindType("Hex.Configs.BonusConfig");
+                        foreach (var heroBonus in heroBonuses)
+                        {
+                            if (heroBonus == null || bonusType == null) continue;
+                            var vals = ReadBonusParams(bonusType, heroBonus);
+                            AppendNumericValues(vals, tier.Values);
+                        }
+
+                        if (!string.IsNullOrEmpty(tier.DescKey) || tier.RequiredItems > 0 || tier.Values.Count > 0)
+                            result.Add(tier);
+                    }
+                }
+            }
+            catch { }
+
+            if (result.Count == 0 && _setBonusTierMissLogged.Add(set))
+                Plugin.Log.LogInfo($"[setval] set='{set}' -> none: no ItemSetConfig.bonuses tiers found");
             if (_setValLog < 8)
             {
                 _setValLog++;
-                Plugin.Log.LogInfo($"[setval] set='{set}' -> {(hitCatalog ?? "none")}: [{string.Join(",", result.ToArray())}]");
+                var parts = new List<string>();
+                for (int i = 0; i < result.Count; i++)
+                    parts.Add($"{result[i].RequiredItems}:{result[i].DescKey}=[{string.Join(",", result[i].Values.ToArray())}]");
+                Plugin.Log.LogInfo($"[setval] set='{set}' -> ItemSetConfig tiers={result.Count}: {string.Join("; ", parts.ToArray())}");
             }
+            _setBonusTierCache[set] = result;
             return result;
         }
 
@@ -1112,24 +1454,12 @@ namespace OldenPedia
             var outp = new List<string>();
             try
             {
-                if (ownerType == null) return outp;
-                var f = ownerType.GetField(field, FR);
-                if (f == null) return outp;
-                var av = f.GetValue(obj);
-                var arr = av != null ? av.TryCast<Il2CppSystem.Array>() : null;
-                if (arr == null) return outp;
-                for (int i = 0; i < arr.Length; i++)
-                {
-                    var e = arr.GetValue(i);
-                    if (e == null) continue;
-                    string s = e.ToString();
-                    if (!string.IsNullOrEmpty(s) && s != "null") outp.Add(s);
-                }
+                if (TryGetMemberValue(ownerType, obj, field, out var value, out var memberType))
+                    AppendSimpleValues(value, memberType, outp);
             }
             catch { }
             return outp;
         }
-
         private static List<string> ReadIdArray(Il2CppSystem.Type ownerType, Il2CppSystem.Object obj,
                                                  string field, Il2CppSystem.Type elemType)
         {
@@ -1230,7 +1560,9 @@ namespace OldenPedia
                 Step("building name map");
                 var names = BuildNameMap(registry, instance, viewType);
                 Step($"names built: {names.Count}");
-                sb.AppendLine($"view-config names loaded: {names.Count} (iterated {_viewCount})");
+                var viewConfigs = BuildViewConfigMap(registry, instance, viewType);
+                Step($"view configs built: {viewConfigs.Count}");
+                sb.AppendLine($"view-config names loaded: {names.Count} (iterated {_viewCount}); view rows={viewConfigs.Count}");
                 sb.AppendLine();
 
                 var catField = FindCatalogField(registry, UnitLogic);
@@ -1270,8 +1602,10 @@ namespace OldenPedia
                         init = Read(statsType, statsObj, "initiative");
                     }
 
-                    var abilitiesObjs = ReadObjArray(cfgType, u, "abilities", out var abilityElemType);
-                    string abilitiesText = BuildAbilitiesText(ownId, abilitiesObjs, abilityElemType);
+                    var abilityEntries = new List<AbilityInfo>();
+                    if (viewConfigs.TryGetValue(ownId ?? "", out var viewConfig) || viewConfigs.TryGetValue(id ?? "", out viewConfig))
+                        abilityEntries = BuildAbilityEntries(viewType, viewConfig);
+                    string abilitiesText = BuildAbilitiesText(abilityEntries);
 
                     string nm;
                     if (!names.TryGetValue(id ?? "", out nm)) names.TryGetValue(ownId ?? "", out nm);
@@ -1281,7 +1615,8 @@ namespace OldenPedia
                         Id = id, Name = nm ?? "", Fraction = fraction, Tier = tier,
                         Hp = hp, DmgMin = dmin, DmgMax = dmax, Off = off, Def = def, Spd = spd, Ini = init,
                         OwnId = ownId, BaseSid = baseSid, UpgradeSid = upg,
-                        Abilities = abilitiesText
+                        Abilities = abilitiesText,
+                        AbilityEntries = abilityEntries
                     });
                     if (rows.Count % 50 == 0) Step($"units {rows.Count}");
                 }
@@ -1347,6 +1682,26 @@ namespace OldenPedia
             return map;
         }
 
+        private static Dictionary<string, Il2CppSystem.Object> BuildViewConfigMap(Il2CppSystem.Type reg, Il2CppSystem.Object inst, Il2CppSystem.Type viewType)
+        {
+            var map = new Dictionary<string, Il2CppSystem.Object>();
+            try
+            {
+                if (viewType == null) return map;
+                var vf = FindCatalogField(reg, UnitView);
+                if (vf == null) return map;
+                var vObj = vf.GetValue(inst);
+                var vList = ReadValuesList(vf.FieldType, vObj, out var vListType);
+                foreach (var v in Iterate(vList, vListType))
+                {
+                    if (v == null) continue;
+                    string id = Read(viewType, v, "id");
+                    if (!string.IsNullOrEmpty(id) && id != "?" && id != "null" && !map.ContainsKey(id)) map[id] = v;
+                }
+            }
+            catch (Exception ex) { Step($"vcfg: EX {ex.Message}"); }
+            return map;
+        }
         // ---- iteration via ToArray() + Il2CppSystem.Array (no enumerator) ----
 
         internal static IEnumerable<Il2CppSystem.Object> Iterate(Il2CppSystem.Object listObj, Il2CppSystem.Type listType)

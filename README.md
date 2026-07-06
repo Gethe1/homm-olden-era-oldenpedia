@@ -28,7 +28,7 @@ Current version: **0.75.0**.
   a live **search box** that filters the left-hand list as you type.
 - **3D unit portraits** — renders each unit's own in-game prefab (idle pose,
   best-available LOD, background-prewarmed for the whole roster) into a frozen
-  snapshot shown in the detail panel. Opt-in (`Show3DUnitPreview`).
+  snapshot shown in the detail panel. Fresh configs enable it by default; existing configs keep their saved `Show3DUnitPreview` value.
 - **Portraits** for heroes, artifacts, and skills (sized to ~40% of the detail
   panel), resolved from the game's own loaded sprites by name.
 - **Resource-bar button** (the gold "?") plus a rebindable **`.`** toggle.
@@ -101,6 +101,11 @@ Current version: **0.75.0**.
   - **`Hex.Settings.Data.SettingsData`** — holds the live `language` string, but
     is only reachable as an *instance* field (`bric`) handed out lazily to
     several settings-UI section objects; see Localization for the full story.
+
+### 3D unit portrait prefab lookup
+The 3D unit portrait path intentionally avoids the failed native unit-window preview pipeline. It reads the unit's `Hex.Configs.UnitViewConfig`, resolves that config's prefab `GameObject`, and renders a sanitized copy with a private Unity camera.
+
+The potentially brittle build-to-build surface is centralized in `src/UnitModel.cs`: current Golden Era interop exposes the prefab as `field_Private_GameObject_0`; older builds were seen under `seo()`, `sew()`, and `bxwr`. If those explicit candidates fail, the mod logs discovered `GameObject` members for future mapping but does not silently choose an unnamed candidate. If a future game build changes those generated names or moves the prefab to a different `GameObject` member, update only `UnitModel.cs` and keep the rest of the renderer independent of obfuscated native UI classes.
 
 ### Unit upgrade families
 Each unit family is 3 entries: base (`baseSid=null`, `upgradeSid=X_upg`), `X_upg`,
@@ -440,7 +445,7 @@ Launch once to generate `BepInEx/interop/`, then build natively (or use
 - **`Language`** — default `auto`. A folder name (`german`, `polish`, …) or code
   (`de`, `pl`, …) forces a language; `auto` runs the full detection chain above.
 - **`BlockMapInput`** — default `true`. Turns the Harmony input blocking on/off.
-- **`Show3DUnitPreview`** — default `false`. Opt-in 3D unit portrait rendering.
+- **`Show3DUnitPreview`** — fresh-config default `true`. Existing config files keep their saved value. Enables 3D unit portrait rendering; set `false` if the first-load/prewarm cost is too high.
 
 ---
 
