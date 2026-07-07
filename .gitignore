@@ -1,3 +1,51 @@
-// Ignore bin and obj that are build objects
+# Build output
 bin/
 obj/
+*.user
+*.suo
+*.userprefs
+.vs/
+.idea/
+
+# NuGet
+*.nupkg
+packages/
+.packages/
+
+# Never commit the game's interop assemblies or any game DLLs
+**/interop/
+Hex*.dll
+Assembly-CSharp.dll
+UnityEngine*.dll
+Unity.*.dll
+
+# Probe output generated at runtime (see README's Dev probes table for the
+# full, current list — these are all written to <GameDir>/BepInEx/OldenPedia/
+# and should never end up inside the repo, but are ignored here too in case a
+# copy gets dropped in for reference during debugging).
+census.txt
+ui_hierarchy.txt
+messagepack_schema.txt
+config_containers.txt
+content_types.txt
+console.txt
+ability_probe.txt
+effects_dump.txt
+lang_probe.txt
+lang_setting_probe.txt
+loc_probe.txt
+style_probe.txt
+type_detail.txt
+units_dump.txt
+units_progress.txt
+
+# Secrets — never commit private keys
+*_ed25519
+*_ed25519.pub
+*.pem
+id_rsa*
+*.key
+
+# OS noise
+Thumbs.db
+.DS_Store
