@@ -31,7 +31,7 @@ namespace OldenPedia
             {
                 // Keep the resource-bar Pedia button installed (handles HUD reloads).
                 PediaButton.EnsureInstalled();
-                PediaWindow.PollSearchInput();
+                bool searchConsumed = PediaWindow.PollSearchInput();
                 if (Plugin.Show3DUnitPreview)
                 {
                     UnitPreviewRenderer.Tick();
@@ -44,7 +44,7 @@ namespace OldenPedia
                 bool wasOpen = PediaWindow.IsOpen;
                 Vector2 mpos = mouse != null ? mouse.position.ReadValue() : new Vector2(0f, 0f);
 
-                // Toggle open — '.' (rebindable) or the resource-bar button.
+                // Toggle open - '.' (rebindable) or the resource-bar button.
                 if (!wasOpen)
                 {
                     if (kb != null && kb[Plugin.ToggleKey].wasPressedThisFrame) PediaWindow.Toggle();
@@ -58,7 +58,7 @@ namespace OldenPedia
                 {
                     bool esc = kb != null && kb[Key.Escape].wasPressedThisFrame;
                     bool tog = kb != null && kb[Plugin.ToggleKey].wasPressedThisFrame;
-                    if (esc || tog) { PediaWindow.SetOpen(false); return; }
+                    if ((esc || tog) && !searchConsumed) { PediaWindow.SetOpen(false); return; }
 
                     if (mouse != null && mouse.leftButton.wasPressedThisFrame)
                     {
@@ -86,7 +86,7 @@ namespace OldenPedia
 
 
                 // Dev recon probes.
-                if (kb != null)
+                if (Plugin.EnableDevProbes && kb != null)
                 {
                     if (kb[Key.L].wasPressedThisFrame) LangSettingProbe.Dump();
                     if (kb[Key.Y].wasPressedThisFrame) StyleProbe.Dump();

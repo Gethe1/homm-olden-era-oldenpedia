@@ -5,7 +5,7 @@ using Il2CppInterop.Runtime;
 
 namespace OldenPedia
 {
-    // EXPERIMENTAL, opt-in (Plugin.Show3DUnitPreview, default OFF).
+    // 3D unit preview, enabled by default for fresh configs via Plugin.Show3DUnitPreview.
     //
     // Renders a unit's own 3D prefab ONCE — after letting its idle animation
     // settle — captures that single frame into a frozen Texture2D, and
@@ -28,7 +28,7 @@ namespace OldenPedia
     // and only THEN activate it.
     public static class UnitPreviewRenderer
     {
-        private const int Layer = 30; // arbitrary; not verified unused, hence opt-in
+        private const int Layer = 30; // private preview layer; keep isolated from gameplay cameras
         private static readonly Vector3 Origin = new Vector3(300000f, 0f, 300000f);
         private const int SettleFrames = 5; // frames to let Animator reach its idle pose before capturing
         private const int Resolution = 768;
@@ -95,6 +95,7 @@ namespace OldenPedia
         // the next id from the prewarm queue.
         public static void Tick()
         {
+            if (_failed) return;
             if (_pendingFrames > 0 && _current != null)
             {
                 _pendingFrames--;
@@ -114,6 +115,9 @@ namespace OldenPedia
 
         private static void StartCapture(string ownId, bool isPrewarm)
         {
+            EnsureSetup();
+            if (_root == null || _holder == null || _cam == null || _rt == null) return;
+
             var prefab = UnitModel.GetPrefab(ownId);
             if (prefab == null) { _failedIds.Add(ownId); return; }
 

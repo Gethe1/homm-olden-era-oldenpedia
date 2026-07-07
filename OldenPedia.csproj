@@ -102,7 +102,7 @@
       <Private>false</Private>
     </Reference>
 
-    <!-- Needed only by the experimental 3D unit preview (UnitPreviewRenderer),
+    <!-- Needed by the 3D unit preview (UnitPreviewRenderer),
          to strip Collider/Rigidbody/ParticleSystem/AudioSource off an
          instantiated unit prefab before it's ever activated. Camera/Light/
          Renderer/RenderTexture come from UnityEngine.CoreModule, already

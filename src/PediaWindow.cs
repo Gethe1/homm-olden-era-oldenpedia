@@ -11,7 +11,7 @@ namespace OldenPedia
 {
     /// <summary>
     /// Encyclopedia window. Procedurally drawn square panel. Top-left dropdown
-    /// switches category (Units / Heroes / Artifacts). Master–detail body: left
+    /// switches category (Units / Heroes / Artifacts). Master-detail body: left
     /// index (faction accordion for grouped categories, flat list otherwise),
     /// right detail with a tab per upgrade variant. Input polled by PediaBehaviour.
     /// </summary>
@@ -23,6 +23,8 @@ namespace OldenPedia
         private static RectTransform _leftViewport, _leftContent, _closeRect, _tabBar, _dropBtn, _rightViewport, _rightContent;
         private static RectTransform _portrait;
         private static Image _portraitImg;
+        private static RectTransform _detailTextRect;
+        private static readonly List<RectTransform> _abilityRows = new List<RectTransform>();
         private static RectTransform _unitPreview;
         private static RawImage _unitPreviewImg;
         private static float _detailW = 320f;
@@ -66,7 +68,7 @@ namespace OldenPedia
                 _open = open;
                 if (_root != null) _root.SetActive(open);
                 if (open) { Populate(); InputBlocker.Block(); }
-                else InputBlocker.Unblock();
+                else { InputBlocker.Unblock(); }
             }
             catch (Exception ex) { Plugin.Log.LogError($"PediaWindow.SetOpen: {ex}"); }
         }
@@ -196,7 +198,7 @@ namespace OldenPedia
 
         // onTextInput isn't exposed in this game's Keyboard interop binding (IL2CPP
         // interop only generates members the game itself references). Falls back
-        // to direct per-key polling instead — the same proven-safe pattern already
+        // to direct per-key polling instead - the same proven-safe pattern already
         // used for Backspace/Escape elsewhere in this file, just extended to
         // letters/digits/space/a few punctuation marks. Search is case-insensitive,
         // so shift is only used to decide "is this a real keypress", not casing.
@@ -214,34 +216,38 @@ namespace OldenPedia
         private static void EnsureSearchInputSubscribed() { /* no-op: search text now comes from per-frame key polling */ }
 
         // Called every frame while open (see PediaBehaviour).
-        public static void PollSearchInput()
+        public static bool PollSearchInput()
         {
-            if (!_open || !_searchFocused) return;
+            if (!_open || !_searchFocused) return false;
             var kb = Keyboard.current;
-            if (kb == null) return;
+            if (kb == null) return false;
             bool changed = false;
+            bool consumed = false;
 
             for (int i = 0; i < SearchLetterKeys.Length; i++)
-                if (kb[SearchLetterKeys[i]].wasPressedThisFrame) { AppendSearchChar((char)('a' + i)); changed = true; }
+                if (kb[SearchLetterKeys[i]].wasPressedThisFrame) { AppendSearchChar((char)('a' + i)); changed = true; consumed = true; }
             for (int i = 0; i < SearchDigitKeys.Length; i++)
-                if (kb[SearchDigitKeys[i]].wasPressedThisFrame) { AppendSearchChar((char)('0' + i)); changed = true; }
-            if (kb[Key.Space].wasPressedThisFrame) { AppendSearchChar(' '); changed = true; }
-            if (kb[Key.Minus].wasPressedThisFrame) { AppendSearchChar('-'); changed = true; }
-            if (kb[Key.Quote].wasPressedThisFrame) { AppendSearchChar('\''); changed = true; }
-            if (kb[Key.Period].wasPressedThisFrame) { AppendSearchChar('.'); changed = true; }
+                if (kb[SearchDigitKeys[i]].wasPressedThisFrame) { AppendSearchChar((char)('0' + i)); changed = true; consumed = true; }
+            if (kb[Key.Space].wasPressedThisFrame) { AppendSearchChar(' '); changed = true; consumed = true; }
+            if (kb[Key.Minus].wasPressedThisFrame) { AppendSearchChar('-'); changed = true; consumed = true; }
+            if (kb[Key.Quote].wasPressedThisFrame) { AppendSearchChar('\''); changed = true; consumed = true; }
+            if (kb[Key.Period].wasPressedThisFrame) { AppendSearchChar('.'); changed = true; consumed = true; }
 
             if (kb[Key.Backspace].wasPressedThisFrame && _searchText.Length > 0)
             {
                 _searchText = _searchText.Substring(0, _searchText.Length - 1);
                 changed = true;
+                consumed = true;
             }
             if (kb[Key.Escape].wasPressedThisFrame && _searchText.Length > 0)
             {
                 _searchText = "";
                 changed = true;
+                consumed = true;
             }
 
             if (changed) { UpdateSearchLabel(); RebuildIndex(); }
+            return consumed;
         }
 
         private static void AppendSearchChar(char c)
@@ -265,8 +271,34 @@ namespace OldenPedia
             }
         }
 
-        private static bool MatchesSearch(string name) =>
-            !string.IsNullOrEmpty(name) && name.IndexOf(_searchText, StringComparison.OrdinalIgnoreCase) >= 0;
+        private static bool MatchesSearchField(string value) =>
+            !string.IsNullOrEmpty(value) && value.IndexOf(_searchText, StringComparison.OrdinalIgnoreCase) >= 0;
+
+        private static bool MatchesSearchItem(DataExtractor.PediaItem it)
+        {
+            if (it == null) return false;
+            if (MatchesSearchField(it.Display) ||
+                MatchesSearchField(it.Id) ||
+                MatchesSearchField(it.Subtitle) ||
+                MatchesSearchField(it.TabLabel) ||
+                MatchesSearchField(it.Description)) return true;
+            for (int i = 0; i < it.Abilities.Count; i++)
+            {
+                var ability = it.Abilities[i];
+                if (ability == null) continue;
+                if (MatchesSearchField(ability.Name) || MatchesSearchField(ability.Description) || MatchesSearchField(ability.IconKey)) return true;
+            }
+            return false;
+        }
+
+        private static bool MatchesSearchFamily(DataExtractor.ItemFamily fam)
+        {
+            if (fam == null) return false;
+            if (MatchesSearchField(fam.Key)) return true;
+            for (int i = 0; i < fam.Variants.Count; i++)
+                if (MatchesSearchItem(fam.Variants[i])) return true;
+            return false;
+        }
 
         private static void RebuildIndex()
         {
@@ -294,12 +326,11 @@ namespace OldenPedia
                     // Searching: skip groups with no match at all; auto-expand any
                     // group that does match (ignoring manual expand/collapse state)
                     // so results are visible without an extra click.
-                    bool groupNameMatches = MatchesSearch(grp.Name);
+                    bool groupNameMatches = MatchesSearchField(grp.Name);
                     var matchingFams = new List<int>();
                     for (int fam = 0; fam < grp.Families.Count; fam++)
                     {
-                        string disp = grp.Families[fam].Variants.Count > 0 ? grp.Families[fam].Variants[0].Display : grp.Families[fam].Key;
-                        if (groupNameMatches || MatchesSearch(disp)) matchingFams.Add(fam);
+                        if (groupNameMatches || MatchesSearchFamily(grp.Families[fam])) matchingFams.Add(fam);
                     }
                     if (matchingFams.Count == 0) continue;
 
@@ -439,22 +470,30 @@ namespace OldenPedia
             if (_detail == null) { return; }
             if (_portrait != null) _portrait.gameObject.SetActive(false);
             if (_unitPreview != null) _unitPreview.gameObject.SetActive(false);
-            if (fam == null || fam.Variants.Count == 0) { _detail.text = ""; _detail.margin = Vector4.zero; return; }
+            if (_rightViewport != null) _rightViewport.gameObject.SetActive(true);
+            ClearAbilityRows();
+            if (fam == null || fam.Variants.Count == 0)
+            {
+                _detail.text = ""; _detail.margin = Vector4.zero;
+                if (_detailTextRect != null) _detailTextRect.sizeDelta = new Vector2(0f, 0f);
+                if (_rightContent != null) _rightContent.sizeDelta = new Vector2(0f, 0f);
+                return;
+            }
             if (_variant < 0 || _variant >= fam.Variants.Count) _variant = 0;
             var it = fam.Variants[_variant];
 
             // Reserve a right margin equal to whatever portrait/preview will show,
-            // so text (title/stats especially) never runs under it; the description
-            // ("legend") still flows in that same margined column, which avoids any
-            // overlap at the cost of not being truly full-width once a portrait ends.
+            // so text (title/stats especially) never runs under it; ability rows
+            // are laid out below that header as their own preview-style list.
             float reservedRight = 0f;
             bool willShowSpritePortrait = _portraitImg != null && !string.IsNullOrEmpty(it.IconKey) && IconLoader.Get(it.IconKey) != null;
             bool willShowUnitPreview = Cat != null && Cat.Name == "Units" && Plugin.Show3DUnitPreview;
             if (willShowSpritePortrait || willShowUnitPreview)
-                reservedRight = Mathf.Max(96f, _detailW * 0.40f) + 20f;
+                reservedRight = Mathf.Max(120f, _detailW * 0.42f) + 20f;
             _detail.margin = new Vector4(0f, 0f, reservedRight, 0f);
-
             _detail.text = Detail(it);
+            LayoutRightContent(it, reservedRight);
+
             if (_portraitImg != null && !string.IsNullOrEmpty(it.IconKey))
             {
                 var sp = IconLoader.Get(it.IconKey);
@@ -473,13 +512,12 @@ namespace OldenPedia
             if (_rightContent != null) _rightContent.anchoredPosition = new Vector2(0f, 0f);
             if (Cat != null && Cat.Name == "Units")
             {
-                UnitModel.Probe(it.Id);
+                if (Plugin.EnableDevProbes) UnitModel.Probe(it.Id);
                 _currentPreviewUnitId = it.Id;
                 if (Plugin.Show3DUnitPreview) TryShowUnitPreview(it.Id);
             }
             else _currentPreviewUnitId = null;
         }
-
         private static string _currentPreviewUnitId;
 
         private static void TryShowUnitPreview(string ownId)
@@ -488,13 +526,13 @@ namespace OldenPedia
             var tex = UnitPreviewRenderer.GetPreview(ownId);
             if (tex == null) return;
             _unitPreviewImg.texture = tex;
-            float w = Mathf.Max(96f, _detailW * 0.40f);
+            float w = Mathf.Max(120f, _detailW * 0.42f);
             _unitPreview.sizeDelta = new Vector2(w, w); // render texture is square
             _unitPreview.gameObject.SetActive(true);
         }
 
         // Called every frame while open (see PediaBehaviour). A preview that's
-        // still capturing when RefreshDetail ran will finish a few frames later —
+        // still capturing when RefreshDetail ran will finish a few frames later -
         // this polls so it appears without needing to reopen the unit.
         public static void PollUnitPreview()
         {
@@ -503,6 +541,98 @@ namespace OldenPedia
             TryShowUnitPreview(_currentPreviewUnitId);
         }
 
+        private static void ClearAbilityRows()
+        {
+            for (int i = 0; i < _abilityRows.Count; i++)
+                if (_abilityRows[i] != null) Object.Destroy(_abilityRows[i].gameObject);
+            _abilityRows.Clear();
+        }
+
+        private static void LayoutRightContent(DataExtractor.PediaItem it, float reservedRight)
+        {
+            if (_rightContent == null || _detailTextRect == null || _detail == null) return;
+            float viewportH = _rightViewport != null ? _rightViewport.rect.height : 0f;
+            float viewportW = _rightViewport != null ? _rightViewport.rect.width : _detailW;
+            if (viewportW <= 0f) viewportW = _detailW;
+
+            _detailTextRect.sizeDelta = new Vector2(0f, 3000f);
+            try { _detail.ForceMeshUpdate(); } catch { }
+            float textH = Mathf.Ceil(Mathf.Max(32f, _detail.preferredHeight + 8f));
+            _detailTextRect.sizeDelta = new Vector2(0f, textH);
+            _detailTextRect.anchoredPosition = new Vector2(0f, 0f);
+
+            float y = -textH;
+            if (Cat != null && Cat.Name == "Units" && it != null && it.Abilities.Count > 0)
+            {
+                y -= 10f;
+                y -= AddAbilityHeader(y, viewportW);
+                for (int i = 0; i < it.Abilities.Count; i++)
+                    y -= AddAbilityRow(it.Abilities[i], y, viewportW);
+            }
+
+            float totalH = Mathf.Ceil(-y + 18f);
+            _rightContent.sizeDelta = new Vector2(0f, Mathf.Max(totalH, viewportH));
+        }
+
+        private static float AddAbilityHeader(float y, float width)
+        {
+            var rt = NewUI("AbilityHeader", _rightContent);
+            rt.anchorMin = new Vector2(0f, 1f); rt.anchorMax = new Vector2(1f, 1f); rt.pivot = new Vector2(0.5f, 1f);
+            rt.anchoredPosition = new Vector2(0f, y); rt.sizeDelta = new Vector2(0f, 30f);
+            var t = rt.gameObject.AddComponent<TextMeshProUGUI>();
+            if (_font != null) t.font = _font;
+            t.text = "<b>Abilities</b>";
+            t.fontSize = 23f; t.alignment = TextAlignmentOptions.Left;
+            t.color = new Color(0.97f, 0.88f, 0.6f, 1f); t.richText = true; t.raycastTarget = false;
+            _abilityRows.Add(rt);
+            return 34f;
+        }
+
+        private static float AddAbilityRow(DataExtractor.AbilityInfo ability, float y, float width)
+        {
+            if (ability == null) return 0f;
+            var row = NewUI("AbilityRow", _rightContent);
+            row.anchorMin = new Vector2(0f, 1f); row.anchorMax = new Vector2(1f, 1f); row.pivot = new Vector2(0.5f, 1f);
+            row.anchoredPosition = new Vector2(0f, y); row.sizeDelta = new Vector2(0f, 76f);
+            var bg = row.gameObject.AddComponent<Image>();
+            bg.color = new Color(0.05f, 0.045f, 0.035f, 0.46f); bg.raycastTarget = false;
+
+            const float iconSize = 44f;
+            var iconRt = NewUI("Icon", row);
+            iconRt.anchorMin = new Vector2(0f, 1f); iconRt.anchorMax = new Vector2(0f, 1f); iconRt.pivot = new Vector2(0f, 1f);
+            iconRt.sizeDelta = new Vector2(iconSize, iconSize); iconRt.anchoredPosition = new Vector2(10f, -10f);
+            var iconImg = iconRt.gameObject.AddComponent<Image>();
+            iconImg.preserveAspect = true; iconImg.raycastTarget = false;
+            var sp = IconLoader.Get(ability.IconKey);
+            if (sp != null) iconImg.sprite = sp;
+            else iconImg.color = new Color(0f, 0f, 0f, 0f);
+
+            var textRt = NewUI("Text", row);
+            textRt.anchorMin = new Vector2(0f, 0f); textRt.anchorMax = new Vector2(1f, 1f); textRt.pivot = new Vector2(0f, 1f);
+            textRt.offsetMin = new Vector2(64f, 8f); textRt.offsetMax = new Vector2(-10f, -8f);
+            var t = textRt.gameObject.AddComponent<TextMeshProUGUI>();
+            if (_font != null) t.font = _font;
+            t.text = AbilityRowText(ability);
+            t.fontSize = 20f; t.alignment = TextAlignmentOptions.TopLeft;
+            t.enableWordWrapping = true; t.overflowMode = TextOverflowModes.Overflow;
+            t.color = new Color(0.92f, 0.90f, 0.84f, 1f); t.richText = true; t.raycastTarget = false;
+            try { t.ForceMeshUpdate(); } catch { }
+            float rowH = Mathf.Ceil(Mathf.Max(62f, t.preferredHeight + 22f));
+            row.sizeDelta = new Vector2(0f, rowH);
+            _abilityRows.Add(row);
+            return rowH + 8f;
+        }
+
+        private static string AbilityRowText(DataExtractor.AbilityInfo ability)
+        {
+            string name = ability != null ? ability.Name : null;
+            string desc = ability != null ? ability.Description : null;
+            if (!string.IsNullOrEmpty(name) && !string.IsNullOrEmpty(desc))
+                return $"<size=22><b>{name}</b></size>\n<size=19><color=#cfcabf>{desc}</color></size>";
+            if (!string.IsNullOrEmpty(name)) return $"<size=22><b>{name}</b></size>";
+            if (!string.IsNullOrEmpty(desc)) return $"<size=19><color=#cfcabf>{desc}</color></size>";
+            return "";
+        }
         private static string Detail(DataExtractor.PediaItem it)
         {
             var sb = new StringBuilder();
@@ -570,7 +700,7 @@ namespace OldenPedia
             // window frame (used across many of its screens at different sizes).
             // The sprite itself has visible internal padding baked into its texture
             // (a shadow/bevel margin), so its OPAQUE area sits inside the rect we'd
-            // naturally size it to — drawn as a separate, larger layer BEHIND the
+            // naturally size it to - drawn as a separate, larger layer BEHIND the
             // panel (oversized by a fixed margin) so its visible frame actually
             // reaches out to meet the gold-bordered elements sitting on top of it,
             // instead of looking inset from them. Falls back to the plain drawn
@@ -610,7 +740,7 @@ namespace OldenPedia
             _dropLabel.text = "Units  \u25BE"; _dropLabel.fontSize = 24f; _dropLabel.alignment = TextAlignmentOptions.Left;
             _dropLabel.color = new Color(0.97f, 0.88f, 0.6f, 1f); _dropLabel.raycastTarget = false;
 
-            // Search bar — same size as the dropdown, placed immediately to its right.
+            // Search bar - same size as the dropdown, placed immediately to its right.
             _searchBox = NewUI("SearchBox", panel);
             _searchBox.anchorMin = new Vector2(0f, 1f); _searchBox.anchorMax = new Vector2(0f, 1f); _searchBox.pivot = new Vector2(0f, 1f);
             _searchBox.sizeDelta = new Vector2(240f, titleH - 6f);
@@ -697,10 +827,11 @@ namespace OldenPedia
             _rightContent = NewUI("RightContent", _rightViewport);
             _rightContent.anchorMin = new Vector2(0f, 1f); _rightContent.anchorMax = new Vector2(1f, 1f); _rightContent.pivot = new Vector2(0.5f, 1f);
             _rightContent.anchoredPosition = new Vector2(0f, 0f); _rightContent.sizeDelta = new Vector2(0f, 0f);
-            var rcsf = _rightContent.gameObject.AddComponent<ContentSizeFitter>();
-            rcsf.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-            rcsf.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
-            _detail = _rightContent.gameObject.AddComponent<TextMeshProUGUI>();
+
+            _detailTextRect = NewUI("DetailText", _rightContent);
+            _detailTextRect.anchorMin = new Vector2(0f, 1f); _detailTextRect.anchorMax = new Vector2(1f, 1f); _detailTextRect.pivot = new Vector2(0.5f, 1f);
+            _detailTextRect.anchoredPosition = new Vector2(0f, 0f); _detailTextRect.sizeDelta = new Vector2(0f, 0f);
+            _detail = _detailTextRect.gameObject.AddComponent<TextMeshProUGUI>();
             if (_font != null) _detail.font = _font;
             _detail.fontSize = 22f; _detail.alignment = TextAlignmentOptions.TopLeft;
             _detail.color = new Color(0.937f, 0.937f, 0.937f, 1f); _detail.richText = true; _detail.raycastTarget = false;
@@ -714,7 +845,7 @@ namespace OldenPedia
             AddBorder(_portrait, Gold, 1.5f);
             _portrait.gameObject.SetActive(false);
 
-            // Unit 3D preview (experimental, opt-in) — same slot as the portrait,
+            // Unit 3D preview (experimental, opt-in) - same slot as the portrait,
             // only one of the two is ever shown depending on category.
             _unitPreview = NewUI("UnitPreview", rightPanel);
             _unitPreview.anchorMin = new Vector2(1f, 1f); _unitPreview.anchorMax = new Vector2(1f, 1f); _unitPreview.pivot = new Vector2(1f, 1f);
